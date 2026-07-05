@@ -10,7 +10,10 @@ wheels/
 
 # Virtual environments
 .venv/
+.env.*
 .env
+*.env
+
 
 # Terraform
 *.tfstate

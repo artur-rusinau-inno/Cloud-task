@@ -40,3 +40,8 @@ variable "tomorrow_api_key" {
     error_message = "Weather API key can contain only letters and numbers"
   }
 }
+
+variable "pip_additional_requirements" {
+  type    = string
+  default = "apache-airflow-providers-google"
+}

@@ -52,7 +52,8 @@ x-airflow-common:
   image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.2.2}
   # build: .
   env_file:
-    - ${ENV_FILE_PATH:-.env}
+    - .env
+    - .env.terraform
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
@@ -80,6 +81,9 @@ x-airflow-common:
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
+    - ${AIRFLOW_PROJ_DIR:-.}/validators:/opt/airflow/validators
+    - ${AIRFLOW_PROJ_DIR:-.}/keys:/opt/airflow/keys
+    - ./core_settings:/opt/airflow/core_settings
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on: &airflow-common-depends-on
     redis:
