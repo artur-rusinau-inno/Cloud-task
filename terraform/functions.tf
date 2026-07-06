@@ -88,6 +88,7 @@ resource "google_cloud_scheduler_job" "weather_fetcher_trigger" {
 
     oidc_token {
       service_account_email = google_service_account.function_sa.email
+      audience              = google_cloudfunctions2_function.weather_fetcher.service_config[0].uri
     }
   }
 }

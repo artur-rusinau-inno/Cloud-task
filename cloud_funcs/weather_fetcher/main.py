@@ -9,6 +9,8 @@ from requests import HTTPError
 
 from core_settings import settings
 
+logging.getLogger().setLevel(logging.INFO)
+
 try:
     storage_client = storage.Client()
     logging.info("GCS Client initialized successfully")
