@@ -7,7 +7,9 @@ resource "local_sensitive_file" "env_file" {
     # ==========================================
 
     TOMORROW_API_KEY=${var.tomorrow_api_key}
+    
     BRONZE_BUCKET_NAME=${google_storage_bucket.created_buckets["bronze"].name}
+    PROJECT_ID="cloud-task-weather"
 
     _PIP_ADDITIONAL_REQUIREMENTS=${var.pip_additional_requirements}
     FERNET_KEY=${random_id.airflow_fernet_key.b64_url}

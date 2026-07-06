@@ -21,5 +21,8 @@ wheels/
 *.tfvars
 *.tfvars.*
 .terraform/
+terraform/files
+terraform/keys
+.tmp_src
 
 !*.example

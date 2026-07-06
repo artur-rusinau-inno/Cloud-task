@@ -18,8 +18,8 @@ class CloudFunctionsSettings(BaseSettings):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
-    airflow = AirflowSettings()
-    cloud_funcs = CloudFunctionsSettings()
+    airflow: AirflowSettings = AirflowSettings()
+    cloud_funcs: CloudFunctionsSettings = CloudFunctionsSettings()
 
 
 settings = Settings()
