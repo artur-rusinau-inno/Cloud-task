@@ -18,11 +18,16 @@ terraform {
       version = "~>2.8"
     }
   }
+  backend "gcs" {
+    bucket = "cloud-task-weather-tfstate-dev"
+  }
 }
 
 provider "google" {
   project = var.project_id
   region  = var.region
 }
+
+
 
 

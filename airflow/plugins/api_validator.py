@@ -1,7 +1,7 @@
 from pydantic import BaseModel, field_validator
 
 
-class WeatherValues(BaseModel):
+class WeatherValuesValidator(BaseModel):
     source_object: str
     event_time: str
     location_name: str

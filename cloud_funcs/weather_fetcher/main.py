@@ -9,27 +9,28 @@ from requests import HTTPError
 
 from core_settings import settings
 
-logging.getLogger().setLevel(logging.INFO)
+logger = logging.getLogger("cloud_funcs")
+logger.setLevel(logging.INFO)
 
 try:
     storage_client = storage.Client()
-    logging.info("GCS Client initialized successfully")
+    logger.info("GCS Client initialized successfully")
 
 except Exception as e:
-    logging.error(f"GCS Client failed to initialize: {e}")
+    logger.error(f"GCS Client failed to initialize: {e}")
     raise e
 
 
 @functions_framework.http
 def fetch_weather_to_bronze(request) -> tuple[dict, int]:
-    bucket_name = settings.cloud_funcs.bronze_bucket_name
-    location = settings.cloud_funcs.location
-    api_key = settings.cloud_funcs.tomorrow_api_key
+    bucket_name = settings.bronze_bucket_name
+    location = settings.location
+    api_key = settings.tomorrow_api_key
 
     url = f"https://api.tomorrow.io/v4/weather/realtime?location={location}&apikey={api_key}"
     headers = {"accept": "application/json"}
 
-    logging.info(f'Trying to fetch weather in "{location.capitalize()}"')
+    logger.info(f'Trying to fetch weather in "{location.capitalize()}"')
 
     try:
         response = requests.get(url, headers=headers, timeout=10)
@@ -38,16 +39,16 @@ def fetch_weather_to_bronze(request) -> tuple[dict, int]:
     except HTTPError as e:
         status_code = e.response.status_code
         reason = e.response.reason
-        logging.error("API request error")
+        logger.error("API request error")
         return {"status": "failure", "status_code": status_code, "reason": reason}, status_code
 
     except Exception as e:
-        logging.error(f"Exception has occured: {e}")
+        logger.error(f"Exception has occured: {e}")
         raise e
 
     data = response.json()
     if not data:
-        logging.error("No data from API call")
+        logger.error("No data from API call")
         return {"status": "failure", "status_code": 502, "reason": "No data from API call"}, 502
 
     data_str = json.dumps(data, indent=4, ensure_ascii=False)
@@ -61,7 +62,7 @@ def fetch_weather_to_bronze(request) -> tuple[dict, int]:
 
     storage_path = f"gs://{bucket_name}/{blob_name}"
 
-    logging.info(f"Created new file in GCS bronze: {storage_path}")
+    logger.info(f"Created new file in GCS bronze: {storage_path}")
 
     return {
         "status": "success",
@@ -78,8 +79,8 @@ def upload_to_gcs_bronze(bucket_name: str, blob_name: str, data: str) -> None:
 
     try:
         blob.upload_from_string(data, content_type="application/json")
-        logging.info("Data uploaded to GCS successfully")
+        logger.info("Data uploaded to GCS successfully")
 
     except Exception as e:
-        logging.error("Failed to upload data to GCS")
+        logger.error("Failed to upload data to GCS")
         raise e
