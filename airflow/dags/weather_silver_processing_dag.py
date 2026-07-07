@@ -1,9 +1,13 @@
+import csv
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from airflow.models import Param
 from airflow.providers.google.cloud.hooks.gcs import GCSHook
+from airflow.providers.google.cloud.transfers.gcs_to_bigquery import GCSToBigQueryOperator
+from airflow.providers.google.cloud.transfers.local_to_gcs import LocalFilesystemToGCSOperator
 from airflow.sdk import dag, task
 from plugins.api_validator import WeatherValuesValidator
 from pydantic import ValidationError
@@ -16,13 +20,13 @@ logger.setLevel(logging.INFO)
 
 @dag(
     schedule="@hourly",
-    start_date=datetime(2026, 1, 1),
+    start_date=datetime(2026, 7, 5),
     catchup=False,
     params={"source_path": Param(default=None, type=["null", "string"])},
 )
 def weather_silver_processing():
 
-    @task
+    @task(multiple_outputs=True)
     def get_source_path(**kwargs):
         params: dict = kwargs.get("params", {})
         logical_date: datetime = kwargs.get("logical_date")
@@ -67,7 +71,7 @@ def weather_silver_processing():
             file_json = json.loads(file_str)
             json_data.append({"file_name": file_name, "file_data": file_json})
 
-        return {"full_path": full_path, "full_data": json_data}
+        return json_data
 
     @task(max_active_tis_per_dagrun=10)
     def flat_json_data(full_path: str, full_data: dict):
@@ -120,7 +124,7 @@ def weather_silver_processing():
     @task(max_active_tis_per_dagrun=10)
     def validate_json_data(json_obj: dict | None):
         if not json_obj:
-            logger.warning("Expected args to validate, nothing was given")
+            logger.warning("Expected args to validate, but nothing was given")
             return None
 
         if not isinstance(json_obj, dict):
@@ -136,20 +140,75 @@ def weather_silver_processing():
 
         return validated.model_dump()
 
-    @task
-    def load_to_silver():
-        pass
+    @task(multiple_outputs=True)
+    def make_csv(data: list[dict]):
+        schema = [
+            "source_object",
+            "event_time",
+            "location_name",
+            "location_lat",
+            "location_lon",
+            "location_type",
+            "ingested_at_utc",
+            "weather_temperature",
+            "weather_humidity",
+            "weather_windSpeed",
+            "weather_cloudCover",
+            "weather_precipitationProbability",
+        ]
 
-    @task
-    def load_to_bigquery():
-        pass
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        csv_file = Path(f"/tmp/data_{timestamp}.csv")
+
+        clean_data = [row for row in data if row is not None]
+
+        with csv_file.open("w", encoding="utf-8", newline="") as file:
+            writer = csv.DictWriter(file, fieldnames=schema)
+            writer.writeheader()
+            writer.writerows(clean_data)
+
+        return {"file_path": str(csv_file), "timestamp": timestamp}
 
     source_path = get_source_path()
     fetched_data = fetch_json_data(source_path)
-    flat_data = flat_json_data.partial(full_path=fetched_data["full_path"]).expand(json_obj=fetched_data["full_data"])
+    flat_data = flat_json_data.partial(full_path=source_path["full_path"]).expand(full_data=fetched_data)
     validated_data = validate_json_data.expand(json_obj=flat_data)
-    load_to_silver(validated_data)
-    load_to_bigquery(validated_data)
+    csv_output = make_csv(validated_data)
+    timestamp = csv_output["timestamp"]
+    file_path = csv_output["file_path"]
+
+    upload_csv_to_gcs = LocalFilesystemToGCSOperator(
+        task_id="upload_csv_to_gcs",
+        src=file_path,
+        dst=f"landing/weather/data_{timestamp}.csv",
+        bucket=settings.silver_bucket_name,
+    )
+
+    gcs_to_bigquery = GCSToBigQueryOperator(
+        task_id="gcs_to_bigquery",
+        bucket=settings.silver_bucket_name,
+        source_objects=[f"landing/weather/data_{timestamp}.csv"],
+        destination_project_dataset_table=settings.bigquery_destination_path,
+        write_disposition="WRITE_APPEND",
+        skip_leading_rows=1,
+        autodetect=False,
+        schema_fields=[
+            {"name": "source_object", "type": "STRING", "mode": "REQUIRED"},
+            {"name": "event_time", "type": "TIMESTAMP", "mode": "REQUIRED"},
+            {"name": "location_name", "type": "STRING", "mode": "REQUIRED"},
+            {"name": "location_lat", "type": "FLOAT", "mode": "NULLABLE"},
+            {"name": "location_lon", "type": "FLOAT", "mode": "NULLABLE"},
+            {"name": "location_type", "type": "STRING", "mode": "NULLABLE"},
+            {"name": "ingested_at_utc", "type": "TIMESTAMP", "mode": "REQUIRED"},
+            {"name": "weather_temperature", "type": "FLOAT", "mode": "NULLABLE"},
+            {"name": "weather_humidity", "type": "FLOAT", "mode": "NULLABLE"},
+            {"name": "weather_windSpeed", "type": "FLOAT", "mode": "NULLABLE"},
+            {"name": "weather_cloudCover", "type": "FLOAT", "mode": "NULLABLE"},
+            {"name": "weather_precipitationProbability", "type": "FLOAT", "mode": "NULLABLE"},
+        ],
+    )
+
+    upload_csv_to_gcs >> gcs_to_bigquery
 
 
 weather_silver_processing()

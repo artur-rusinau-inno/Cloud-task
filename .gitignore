@@ -21,8 +21,8 @@ wheels/
 *.tfvars
 *.tfvars.*
 .terraform/
-terraform/files
+terraform/files/*.zip
 terraform/keys
-.tmp_src
 
 !*.example
+!.gitkeep

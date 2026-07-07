@@ -5,36 +5,40 @@ resource "google_storage_bucket" "gcf_source_bucket" {
   force_destroy               = true
   public_access_prevention    = "enforced"
   uniform_bucket_level_access = true
+  versioning {
+    enabled = true
+  }
 }
 
-resource "terraform_data" "prepare_src" {
-  triggers_replace = {
-    main_md5   = md5(file("${path.module}/../cloud_funcs/weather_fetcher/main.py"))
-    req_md5    = md5(file("${path.module}/../cloud_funcs/weather_fetcher/requirements.txt"))
-    config_md5 = md5(file("${path.module}/../core_settings/core_settings.py"))
-  }
-
-  provisioner "local-exec" {
-    interpreter = ["bash", "-c"]
-    command     = <<EOT
-      rm -rf ${path.module}/.tmp_src && \
-      mkdir -p ${path.module}/.tmp_src && \
-      cp -r ${path.module}/../cloud_funcs/weather_fetcher/* ${path.module}/.tmp_src/ && \
-      cp -r ${path.module}/../core_settings ${path.module}/.tmp_src/
-    EOT
-  }
+resource "local_file" "files_directory_create" {
+  content  = ""
+  filename = "${path.module}/files/.gitkeep"
 }
 
 data "archive_file" "function_zip" {
   type        = "zip"
-  source_dir  = "${path.module}/.tmp_src"
   output_path = "${path.module}/files/weather_fetcher.zip"
-
-  depends_on = [terraform_data.prepare_src]
+  depends_on  = [local_file.files_directory_create]
+  source {
+    content  = file("${path.module}/../cloud_funcs/weather_fetcher/main.py")
+    filename = "main.py"
+  }
+  source {
+    content  = file("${path.module}/../cloud_funcs/weather_fetcher/requirements.txt")
+    filename = "requirements.txt"
+  }
+  source {
+    content  = file("${path.module}/../core_settings/core_settings.py")
+    filename = "core_settings/core_settings.py"
+  }
+  source {
+    content  = file("${path.module}/../core_settings/__init__.py")
+    filename = "core_settings/__init__.py"
+  }
 }
 
 resource "google_storage_bucket_object" "zip_object" {
-  name   = "weather_fetcher_${data.archive_file.function_zip.output_md5}.zip"
+  name   = "weather_fetcher.zip"
   bucket = google_storage_bucket.gcf_source_bucket.name
   source = data.archive_file.function_zip.output_path
 }
@@ -43,12 +47,13 @@ resource "google_cloudfunctions2_function" "weather_fetcher" {
   name     = "${var.project_id}-tomorrow-io-api-fetcher"
   location = var.region
   build_config {
-    runtime     = "python313"
+    runtime     = "python312"
     entry_point = "fetch_weather_to_bronze"
     source {
       storage_source {
-        bucket = google_storage_bucket.gcf_source_bucket.name
-        object = google_storage_bucket_object.zip_object.name
+        bucket     = google_storage_bucket.gcf_source_bucket.name
+        object     = google_storage_bucket_object.zip_object.name
+        generation = google_storage_bucket_object.zip_object.generation
       }
     }
   }
@@ -61,8 +66,10 @@ resource "google_cloudfunctions2_function" "weather_fetcher" {
     ingress_settings = "ALLOW_ALL"
 
     environment_variables = {
-      ENV                = var.environment
       BRONZE_BUCKET_NAME = google_storage_bucket.created_buckets["bronze"].name
+      SILVER_BUCKET_NAME = google_storage_bucket.created_buckets["silver"].name
+      BIGQUERY_DATASET   = google_bigquery_dataset.weather_gold_dataset.dataset_id
+      BIGQUERY_TABLE     = google_bigquery_table.weather_gold_table.table_id
     }
     secret_environment_variables {
       key        = "TOMORROW_API_KEY"
