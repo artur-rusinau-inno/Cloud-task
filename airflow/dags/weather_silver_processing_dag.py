@@ -21,8 +21,9 @@ logger.setLevel(logging.INFO)
 @dag(
     schedule="@hourly",
     start_date=datetime(2026, 7, 5),
-    catchup=False,
+    catchup=True,
     params={"source_path": Param(default=None, type=["null", "string"])},
+    max_active_runs=10,
 )
 def weather_silver_processing():
 
@@ -45,8 +46,8 @@ def weather_silver_processing():
 
         return {"source_path": source_path, "full_path": full_path}
 
-    @task
-    def fetch_json_data(data: dict):
+    @task.short_circuit
+    def check_for_files(data: dict):
         source_path = data.get("source_path")
         full_path = data.get("full_path")
 
@@ -54,27 +55,36 @@ def weather_silver_processing():
         files: list[str] = hook.list(settings.bronze_bucket_name, prefix=source_path)
 
         if not files:
-            error_message = f"No files found in path: {full_path}"
-            logger.error(error_message)
-            raise ValueError(error_message)
+            logger.error(f"No files found in path: {full_path}")
+            return False
 
-        else:
-            logger.info(f"{len(files)} found in path: {full_path}")
+        logger.info(f"{len(files)} found in path: {full_path}")
+        return files
 
-        json_data: list[dict] = []
+    @task(max_active_tis_per_dagrun=10)
+    def fetch_json_data(file_name: str):
+        hook = GCSHook()
 
-        for file_name in files:
-            if not file_name.endswith(".json"):
-                continue
+        if not file_name.endswith(".json"):
+            logger.warning("Got not a JSON file")
+            return None
 
-            file_str = hook.download(settings.bronze_bucket_name, file_name).decode("utf-8")
-            file_json = json.loads(file_str)
-            json_data.append({"file_name": file_name, "file_data": file_json})
+        file_str = hook.download(settings.bronze_bucket_name, file_name).decode("utf-8")
+        file_json = json.loads(file_str)
+        return {"file_name": file_name, "file_data": file_json}
 
-        return json_data
+    @task
+    def filter_clean_json(corrupted_data: list):
+        clean_list = [item for item in corrupted_data if item is not None]
+        logger.info(f"Excluded {len(corrupted_data) - len(clean_list)} not-JSON objects")
+        return clean_list
 
     @task(max_active_tis_per_dagrun=10)
     def flat_json_data(full_path: str, full_data: dict):
+        if not full_data:
+            logger.warning("Got empty file instead of data")
+            return None
+
         try:
             file_name = full_data["file_name"]
 
@@ -170,9 +180,16 @@ def weather_silver_processing():
         return {"file_path": str(csv_file), "timestamp": timestamp}
 
     source_path = get_source_path()
-    fetched_data = fetch_json_data(source_path)
-    flat_data = flat_json_data.partial(full_path=source_path["full_path"]).expand(full_data=fetched_data)
+    files = check_for_files(source_path)
+
+    fetched_data = fetch_json_data.expand(file_name=files)
+
+    clean_fetched_data = filter_clean_json(fetched_data)
+
+    flat_data = flat_json_data.partial(full_path=source_path["full_path"]).expand(full_data=clean_fetched_data)
+
     validated_data = validate_json_data.expand(json_obj=flat_data)
+
     csv_output = make_csv(validated_data)
     timestamp = csv_output["timestamp"]
     file_path = csv_output["file_path"]
