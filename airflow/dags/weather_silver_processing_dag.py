@@ -1,9 +1,9 @@
-import csv
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pandas as pd
 from airflow.models import Param
 from airflow.providers.google.cloud.hooks.gcs import GCSHook
 from airflow.providers.google.cloud.transfers.gcs_to_bigquery import GCSToBigQueryOperator
@@ -20,8 +20,8 @@ logger.setLevel(logging.INFO)
 
 @dag(
     schedule="@hourly",
-    start_date=datetime(2026, 7, 5),
-    catchup=True,
+    start_date=datetime(2026, 1, 1),
+    catchup=False,
     params={"source_path": Param(default=None, type=["null", "string"])},
     max_active_runs=10,
 )
@@ -31,14 +31,15 @@ def weather_silver_processing():
     def get_source_path(**kwargs):
         params: dict = kwargs.get("params", {})
         logical_date: datetime = kwargs.get("logical_date")
+        previout_hour = logical_date - timedelta(hours=1)
         source_path: str = params.get("source_path")
 
         if not source_path:
-            source_path = f"weather/realtime/{settings.location}/{logical_date.strftime('%Y/%m/%d/%H')}/"
-            run_type = "Scheduled"
+            source_path = f"weather/realtime/{settings.location}/{previout_hour.strftime('%Y/%m/%d/%H')}/"
+            run_type = "SCHEDULED"
 
         else:
-            run_type = "Manual"
+            run_type = "MANUAL"
 
         full_path = f"gs://{settings.bronze_bucket_name}/{source_path}"
 
@@ -48,25 +49,25 @@ def weather_silver_processing():
 
     @task.short_circuit
     def check_for_files(data: dict):
-        source_path = data.get("source_path")
-        full_path = data.get("full_path")
+        source_path = data["source_path"]
+        full_path = data["full_path"]
 
         hook = GCSHook()
-        files: list[str] = hook.list(settings.bronze_bucket_name, prefix=source_path)
+        list_files: list[str] = hook.list(settings.bronze_bucket_name, prefix=source_path)
 
-        if not files:
+        if not list_files:
             logger.error(f"No files found in path: {full_path}")
             return False
 
-        logger.info(f"{len(files)} found in path: {full_path}")
-        return files
+        logger.info(f"{len(list_files)} found in path: {full_path}")
+        return list_files
 
     @task(max_active_tis_per_dagrun=10)
     def fetch_json_data(file_name: str):
         hook = GCSHook()
 
         if not file_name.endswith(".json"):
-            logger.warning("Got not a JSON file")
+            logger.warning(f"Got not a JSON file: {file_name}")
             return None
 
         file_str = hook.download(settings.bronze_bucket_name, file_name).decode("utf-8")
@@ -76,34 +77,15 @@ def weather_silver_processing():
     @task
     def filter_clean_json(corrupted_data: list):
         clean_list = [item for item in corrupted_data if item is not None]
-        logger.info(f"Excluded {len(corrupted_data) - len(clean_list)} not-JSON objects")
+        logger.info(f"Excluded {len(corrupted_data) - len(clean_list)} non-JSON objects")
         return clean_list
 
     @task(max_active_tis_per_dagrun=10)
     def flat_json_data(full_path: str, full_data: dict):
-        if not full_data:
-            logger.warning("Got empty file instead of data")
-            return None
+        file_name = full_data["file_name"]
+        file_data: dict = full_data["file_data"]
 
-        try:
-            file_name = full_data["file_name"]
-
-        except KeyError:
-            logger.error(f"Found file with broken name in path: {full_path}")
-            return None
-
-        source_object = f"{full_path}/{file_name}"
-
-        try:
-            file_data: dict = full_data["file_data"]
-
-        except KeyError:
-            logger.error(f'Invalid format for file: {source_object}. Missing "file_data" key')
-            return None
-
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-            return None
+        source_object = f"{full_path}{file_name}"
 
         try:
             data: dict = file_data["data"]
@@ -152,30 +134,25 @@ def weather_silver_processing():
 
     @task(multiple_outputs=True)
     def make_csv(data: list[dict]):
-        schema = [
-            "source_object",
-            "event_time",
-            "location_name",
-            "location_lat",
-            "location_lon",
-            "location_type",
-            "ingested_at_utc",
-            "weather_temperature",
-            "weather_humidity",
-            "weather_windSpeed",
-            "weather_cloudCover",
-            "weather_precipitationProbability",
-        ]
+        clean_data = [row for row in data if row is not None]
+
+        if not clean_data:
+            error_message = "No data left for creating CSV report, DAG aborted"
+            logger.error(error_message)
+            raise ValueError(error_message)
+
+        df = pd.DataFrame(clean_data)
+        schema = [field["name"] for field in settings.bigquery_schema]
+
+        df = df.reindex(columns=schema)
+        df = df.drop_duplicates(["location_name", "event_time"])
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         csv_file = Path(f"/tmp/data_{timestamp}.csv")
 
-        clean_data = [row for row in data if row is not None]
+        df.to_csv(csv_file, index=False, encoding="utf-8")
 
-        with csv_file.open("w", encoding="utf-8", newline="") as file:
-            writer = csv.DictWriter(file, fieldnames=schema)
-            writer.writeheader()
-            writer.writerows(clean_data)
+        logger.info(f"CSV report successfully created in path {csv_file}, {len(df)} rows")
 
         return {"file_path": str(csv_file), "timestamp": timestamp}
 
@@ -183,11 +160,9 @@ def weather_silver_processing():
     files = check_for_files(source_path)
 
     fetched_data = fetch_json_data.expand(file_name=files)
-
     clean_fetched_data = filter_clean_json(fetched_data)
 
     flat_data = flat_json_data.partial(full_path=source_path["full_path"]).expand(full_data=clean_fetched_data)
-
     validated_data = validate_json_data.expand(json_obj=flat_data)
 
     csv_output = make_csv(validated_data)
@@ -209,20 +184,7 @@ def weather_silver_processing():
         write_disposition="WRITE_APPEND",
         skip_leading_rows=1,
         autodetect=False,
-        schema_fields=[
-            {"name": "source_object", "type": "STRING", "mode": "REQUIRED"},
-            {"name": "event_time", "type": "TIMESTAMP", "mode": "REQUIRED"},
-            {"name": "location_name", "type": "STRING", "mode": "REQUIRED"},
-            {"name": "location_lat", "type": "FLOAT", "mode": "NULLABLE"},
-            {"name": "location_lon", "type": "FLOAT", "mode": "NULLABLE"},
-            {"name": "location_type", "type": "STRING", "mode": "NULLABLE"},
-            {"name": "ingested_at_utc", "type": "TIMESTAMP", "mode": "REQUIRED"},
-            {"name": "weather_temperature", "type": "FLOAT", "mode": "NULLABLE"},
-            {"name": "weather_humidity", "type": "FLOAT", "mode": "NULLABLE"},
-            {"name": "weather_windSpeed", "type": "FLOAT", "mode": "NULLABLE"},
-            {"name": "weather_cloudCover", "type": "FLOAT", "mode": "NULLABLE"},
-            {"name": "weather_precipitationProbability", "type": "FLOAT", "mode": "NULLABLE"},
-        ],
+        schema_fields=settings.bigquery_schema,
     )
 
     upload_csv_to_gcs >> gcs_to_bigquery

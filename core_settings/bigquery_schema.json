@@ -1,0 +1,62 @@
+[
+    {
+        "name": "source_object",
+        "type": "STRING",
+        "mode": "REQUIRED"
+    },
+    {
+        "name": "event_time",
+        "type": "TIMESTAMP",
+        "mode": "REQUIRED"
+    },
+    {
+        "name": "location_name",
+        "type": "STRING",
+        "mode": "REQUIRED"
+    },
+    {
+        "name": "location_lat",
+        "type": "FLOAT",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "location_lon",
+        "type": "FLOAT",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "location_type",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "ingested_at_utc",
+        "type": "TIMESTAMP",
+        "mode": "REQUIRED"
+    },
+    {
+        "name": "weather_temperature",
+        "type": "FLOAT",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "weather_humidity",
+        "type": "FLOAT",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "weather_windSpeed",
+        "type": "FLOAT",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "weather_cloudCover",
+        "type": "FLOAT",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "weather_precipitationProbability",
+        "type": "FLOAT",
+        "mode": "NULLABLE"
+    }
+]

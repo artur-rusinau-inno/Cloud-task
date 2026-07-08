@@ -79,7 +79,6 @@ def upload_to_gcs_bronze(bucket_name: str, blob_name: str, data: str) -> None:
 
     try:
         blob.upload_from_string(data, content_type="application/json")
-        logger.info("Data uploaded to GCS successfully")
 
     except Exception as e:
         logger.error("Failed to upload data to GCS")

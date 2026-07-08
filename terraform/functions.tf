@@ -66,6 +66,7 @@ resource "google_cloudfunctions2_function" "weather_fetcher" {
     ingress_settings = "ALLOW_ALL"
 
     environment_variables = {
+      PROJECT_ID         = var.project_id
       BRONZE_BUCKET_NAME = google_storage_bucket.created_buckets["bronze"].name
       SILVER_BUCKET_NAME = google_storage_bucket.created_buckets["silver"].name
       BIGQUERY_DATASET   = google_bigquery_dataset.weather_gold_dataset.dataset_id

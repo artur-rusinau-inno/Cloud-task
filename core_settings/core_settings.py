@@ -1,8 +1,10 @@
+import json
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-BASE_DIR = Path(__file__).parents[2]
+BASE_DIR = Path(__file__).parents[1]
+CURRENT_DIR = Path(__file__).parent
 
 
 class Settings(BaseSettings):
@@ -20,6 +22,13 @@ class Settings(BaseSettings):
     @property
     def bigquery_destination_path(self):
         return f"{self.project_id}.{self.bigquery_dataset}.{self.bigquery_table}"
+
+    @property
+    def bigquery_schema(self):
+        file = CURRENT_DIR / "bigquery_schema.json"
+        with file.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data
 
 
 settings = Settings()
