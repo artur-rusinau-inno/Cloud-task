@@ -1,15 +1,3 @@
-resource "google_storage_bucket" "gcf_source_bucket" {
-  name                        = "${var.project_id}-gcf-source-${var.environment}"
-  location                    = var.region
-  project                     = var.project_id
-  force_destroy               = true
-  public_access_prevention    = "enforced"
-  uniform_bucket_level_access = true
-  versioning {
-    enabled = true
-  }
-}
-
 resource "local_file" "files_directory_create" {
   content  = ""
   filename = "${path.module}/files/.gitkeep"
@@ -51,7 +39,7 @@ resource "google_cloudfunctions2_function" "weather_fetcher" {
     entry_point = "fetch_weather_to_bronze"
     source {
       storage_source {
-        bucket     = google_storage_bucket.gcf_source_bucket.name
+        bucket     = local.gcf_bucket.name
         object     = google_storage_bucket_object.zip_object.name
         generation = google_storage_bucket_object.zip_object.generation
       }
@@ -61,16 +49,16 @@ resource "google_cloudfunctions2_function" "weather_fetcher" {
     max_instance_count    = 1
     available_memory      = "256Mi"
     timeout_seconds       = 60
-    service_account_email = google_service_account.function_sa.email
+    service_account_email = local.sa_cloud_func.email
 
     ingress_settings = "ALLOW_ALL"
 
     environment_variables = {
       PROJECT_ID         = var.project_id
-      BRONZE_BUCKET_NAME = google_storage_bucket.created_buckets["bronze"].name
-      SILVER_BUCKET_NAME = google_storage_bucket.created_buckets["silver"].name
-      BIGQUERY_DATASET   = google_bigquery_dataset.weather_gold_dataset.dataset_id
-      BIGQUERY_TABLE     = google_bigquery_table.weather_gold_table.table_id
+      BRONZE_BUCKET_NAME = local.bronze_bucket.name
+      SILVER_BUCKET_NAME = local.silver_bucket.name
+      BIGQUERY_DATASET   = local.bigquery_dataset.dataset_id
+      BIGQUERY_TABLE     = local.bigquery_table.table_id
     }
     secret_environment_variables {
       key        = "TOMORROW_API_KEY"
@@ -86,17 +74,15 @@ resource "google_cloud_scheduler_job" "weather_fetcher_trigger" {
   schedule         = "*/10 * * * *"
   time_zone        = "Etc/UTC"
   attempt_deadline = "180s"
-  project          = var.project_id
-  region           = var.region
 
   http_target {
     http_method = "GET"
 
-    uri = google_cloudfunctions2_function.weather_fetcher.service_config[0].uri
+    uri = local.cloud_func.service_config[0].uri
 
     oidc_token {
-      service_account_email = google_service_account.function_sa.email
-      audience              = google_cloudfunctions2_function.weather_fetcher.service_config[0].uri
+      service_account_email = local.sa_cloud_func.email
+      audience              = local.cloud_func.service_config[0].uri
     }
   }
 }

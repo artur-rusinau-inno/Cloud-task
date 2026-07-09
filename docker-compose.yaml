@@ -86,7 +86,7 @@ x-airflow-common:
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
     - ./core_settings:/opt/airflow/core_settings
-    - ./terraform/keys:/opt/airflow/keys
+    - ./terraform/keys:/opt/airflow/keys:ro
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on: &airflow-common-depends-on
     redis:

@@ -1,77 +1,109 @@
-##################################
-# Сервисный аккаунт для cloud func
-resource "google_service_account" "function_sa" {
-  account_id = "weather-fetcher-sa-${var.environment}"
-  project    = var.project_id
-}
+locals {
+  service_account_names = toset(["airflow", "cloud-func"])
+  sa_airflow            = google_service_account.service_accounts["airflow"]
+  sa_cloud_func         = google_service_account.service_accounts["cloud-func"]
+  bucket_permissions = {
+    bronze_editor = {
+      sa     = local.sa_cloud_func.email
+      bucket = local.bronze_bucket.name
+      role   = "roles/storage.objectCreator"
+    }
 
-# Разрешаем cloud func писать в бронзу
-resource "google_storage_bucket_iam_member" "bronze_write" {
-  bucket = google_storage_bucket.created_buckets["bronze"].name
-  role   = "roles/storage.objectCreator"
-  member = "serviceAccount:${google_service_account.function_sa.email}"
-}
+    bronze_reader = {
+      sa     = local.sa_airflow.email
+      bucket = local.bronze_bucket.name
+      role   = "roles/storage.objectViewer"
+    }
 
-# Разрешаем cloud func читать ключ от tomorrow.io
-resource "google_secret_manager_secret_iam_member" "secret_read" {
-  secret_id = google_secret_manager_secret.weather_api_key.secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.function_sa.email}"
-}
+    silver_admin = {
+      sa     = local.sa_airflow.email
+      bucket = local.silver_bucket.name
+      role   = "roles/storage.objectAdmin"
+    }
+  }
 
-# Разрешаем функции вызывать саму себя по таймеру
-resource "google_cloud_run_service_iam_member" "scheduler_invoke" {
-  project  = var.project_id
-  location = var.region
-  service  = google_cloudfunctions2_function.weather_fetcher.name
-  role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.function_sa.email}"
-}
+  secret_permissions = {
+    secret_reader = {
+      sa        = local.sa_cloud_func.email
+      secret_id = google_secret_manager_secret.weather_api_key.secret_id
+      role      = "roles/secretmanager.secretAccessor"
+    }
+  }
 
-##########################################
-# Сервисный аккаунт для локального airflow
-resource "google_service_account" "airflow_sa" {
-  account_id = "airflow-runner-sa-${var.environment}"
-  project    = var.project_id
-}
+  bigquery_dataset_permissions = {
+    bq_editor = {
+      sa         = local.sa_airflow.email
+      dataset_id = google_bigquery_dataset.weather_gold_dataset.dataset_id
+      role       = "roles/bigquery.dataEditor"
+    }
+  }
 
-# Разрешаем локальному airflow читать из бронзы
-resource "google_storage_bucket_iam_member" "airflow_bronze_read" {
-  bucket = google_storage_bucket.created_buckets["bronze"].name
-  role   = "roles/storage.objectViewer"
-  member = "serviceAccount:${google_service_account.airflow_sa.email}"
-}
+  bigquery_job_permissions = {
+    bq_job_user = {
+      sa   = local.sa_airflow.email
+      role = "roles/bigquery.jobUser"
+    }
+  }
 
-# Разрешаем локальному airflow писать/удалять в сильвере
-resource "google_storage_bucket_iam_member" "airflow_silver_admin" {
-  bucket = google_storage_bucket.created_buckets["silver"].name
-  role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.airflow_sa.email}"
-}
-
-# Разрешаем локальному airflow писать в BigQuery
-resource "google_project_iam_member" "airflow_bq_editor" {
-  project = var.project_id
-  role    = "roles/bigquery.dataEditor"
-  member  = "serviceAccount:${google_service_account.airflow_sa.email}"
-}
-
-# Разрешаем локальному airflow ранить джобы в BigQuery
-resource "google_project_iam_member" "airflow_bq_job_user" {
-  project = var.project_id
-  role    = "roles/bigquery.jobUser"
-  member  = "serviceAccount:${google_service_account.airflow_sa.email}"
+  run_service_permissions = {
+    scheduler_invoke = {
+      sa   = local.sa_cloud_func.email
+      func = local.cloud_func.name
+      role = "roles/run.invoker"
+    }
+  }
 }
 
 
 #####################################
-# Создаём ключ для локального airflow
 resource "google_service_account_key" "airflow_sa_key" {
-  service_account_id = google_service_account.airflow_sa.name
+  service_account_id = local.sa_airflow.id
 }
 
-# Сохраняем ключ в terraform/keys
 resource "local_sensitive_file" "gcp_key" {
   content  = base64decode(google_service_account_key.airflow_sa_key.private_key)
   filename = "${path.module}/keys/gcp-airflow-key.json"
+}
+
+###########################################################################################################
+
+
+resource "google_service_account" "service_accounts" {
+  for_each   = local.service_account_names
+  account_id = "${each.value}-sa-${var.environment}"
+}
+
+resource "google_storage_bucket_iam_member" "bucket_permissions" {
+  for_each = local.bucket_permissions
+  member   = "serviceAccount:${each.value.sa}"
+  role     = each.value.role
+  bucket   = each.value.bucket
+}
+
+resource "google_secret_manager_secret_iam_member" "secret_permissions" {
+  for_each  = local.secret_permissions
+  member    = "serviceAccount:${each.value.sa}"
+  role      = each.value.role
+  secret_id = each.value.secret_id
+}
+
+resource "google_bigquery_dataset_iam_member" "bigquery_dataset_permissions" {
+  for_each   = local.bigquery_dataset_permissions
+  member     = "serviceAccount:${each.value.sa}"
+  role       = each.value.role
+  dataset_id = each.value.dataset_id
+}
+
+resource "google_project_iam_member" "bigquery_job_permissions" {
+  for_each = local.bigquery_job_permissions
+  project  = var.project_id
+  member   = "serviceAccount:${each.value.sa}"
+  role     = each.value.role
+}
+
+resource "google_cloud_run_service_iam_member" "run_service_permissions" {
+  for_each = local.run_service_permissions
+  member   = "serviceAccount:${each.value.sa}"
+  role     = each.value.role
+  service  = each.value.func
 }
