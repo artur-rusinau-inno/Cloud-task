@@ -27,3 +27,5 @@ terraform/keys
 
 !*.example
 !.gitkeep
+
+.mimocode
